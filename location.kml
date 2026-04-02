@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?> 
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+
+<Style id="transBluePoly">
+  <LineStyle>
+    <width>1.5</width>
+    <color>501400E6</color>
+  </LineStyle>
+</Style>
+
+<!-- Hyderabad to Mumbai -->
+<Placemark>
+  <name>Hyderabad to Mumbai</name>
+  <styleUrl>#transBluePoly</styleUrl>
+  <LineString>
+    <coordinates>
+      78.4867,17.3850
+      72.8258,18.9750
+    </coordinates>
+  </LineString>
+</Placemark>
+
+<!-- Hyderabad to Delhi -->
+<Placemark>
+  <name>Hyderabad to Delhi</name>
+  <styleUrl>#transBluePoly</styleUrl>
+  <LineString>
+    <coordinates>
+      78.4867,17.3850
+      77.2090,28.6139
+    </coordinates>
+  </LineString>
+</Placemark>
+
+<!-- Hyderabad to Bengaluru -->
+<Placemark>
+  <name>Hyderabad to Bengaluru</name>
+  <styleUrl>#transBluePoly</styleUrl>
+  <LineString>
+    <coordinates>
+      78.4867,17.3850
+      77.5946,12.9716
+    </coordinates>
+  </LineString>
+</Placemark>
+
+
+<Placemark>
+  <name>Hyderabad to Chennai</name>
+  <styleUrl>#transBluePoly</styleUrl>
+  <LineString>
+    <coordinates>
+      78.4867,17.3850
+      80.2707,13.0827
+    </coordinates>
+  </LineString>
+</Placemark>
+
+</Document>
+</kml>
