@@ -1,0 +1,26 @@
+# Environment variables & secrets
+.env
+*.env
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# GeoIP databases & PCAP captures
+*.mmdb
+*.dat
+*.pcap
+
+# Python cache & virtualenv
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.pytest_cache/
+
+# Node modules & OS files
+node_modules/
+.DS_Store
+Thumbs.db

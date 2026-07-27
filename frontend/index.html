@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Network Traffic — OpenStreetMap Dashboard</title>
+  <meta name="description" content="Automated real-time network traffic geo-tracking dashboard powered by Scapy, GeoIP, and Leaflet OpenStreetMap.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet CSS & Plugins -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="dashboard-container">
+    <!-- Top Header Bar -->
+    <header class="header-bar">
+      <div class="logo-group">
+        <div class="radar-pulse"></div>
+        <h1>GeoTraffic<span>Live</span></h1>
+      </div>
+
+      <div class="status-group">
+        <span id="health-badge" class="badge badge-offline" aria-live="polite">IDLE</span>
+        <span id="ws-badge" class="badge badge-offline">WS Offline</span>
+      </div>
+
+      <div class="controls-group">
+        <!-- Interface Selector or Replay Badge -->
+        <div id="interface-container">
+          <select id="select-interface" class="control-select" aria-label="Select Network Interface">
+            <option value="">Loading interfaces...</option>
+          </select>
+          <span id="replay-badge" class="badge badge-info hidden">Replay Mode</span>
+        </div>
+
+        <!-- Duration Limit Selector -->
+        <select id="select-duration" class="control-select" aria-label="Select Capture Duration Limit">
+          <option value="0">Run: Unlimited</option>
+          <option value="30">Run: 30s</option>
+          <option value="60">Run: 1 min</option>
+          <option value="300">Run: 5 min</option>
+          <option value="900">Run: 15 min</option>
+        </select>
+
+        <!-- Unified Start/Stop Capture Toggle Button -->
+        <button id="btn-capture-toggle" class="btn btn-success" aria-label="Start or Stop Packet Capture">
+          <svg id="capture-icon" class="icon" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+          <span id="capture-toggle-text">Start Capture</span>
+        </button>
+
+        <!-- Live Counter & Timer Widget -->
+        <div id="live-capture-widget" class="live-widget hidden">
+          <span id="widget-pkt-count" class="widget-badge">Pkts: 0</span>
+          <span id="widget-timer" class="widget-badge widget-timer hidden">⏱ 00:00</span>
+        </div>
+
+        <button id="btn-clear" class="btn btn-secondary" aria-label="Clear Dashboard View">Clear</button>
+        <button id="btn-export" class="btn btn-secondary" aria-label="Export CSV Log">Export CSV</button>
+        <button id="btn-watchlist" class="btn btn-secondary" aria-label="Configure Watchlist Alerts">Watchlist</button>
+        <button id="btn-theme" class="btn btn-icon" aria-label="Toggle Dark Light Theme">☀️</button>
+      </div>
+    </header>
+
+    <!-- Top Statistics Dashboard Widgets -->
+    <section class="stats-bar" aria-label="Live Network Metrics">
+      <div class="stat-card">
+        <div class="stat-label">Total Traffic</div>
+        <div id="stat-packets" class="stat-value">0</div>
+        <div id="stat-bytes" class="stat-sub">0 KB</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Unique Remote IPs</div>
+        <div id="stat-ips" class="stat-value">0</div>
+        <div id="stat-dropped" class="stat-sub">0 dropped</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Countries Touched</div>
+        <div id="stat-countries" class="stat-value">0</div>
+        <div id="stat-top-country" class="stat-sub">--</div>
+      </div>
+      <div class="stat-card sparkline-card">
+        <div class="stat-label">Throughput (KB/s)</div>
+        <div id="stat-throughput" class="stat-value">0.0</div>
+        <canvas id="sparkline-canvas" width="120" height="30"></canvas>
+      </div>
+    </section>
+
+    <!-- Main Content Area: Map + Side Panel -->
+    <main class="main-layout">
+      <!-- Map Section -->
+      <section class="map-section">
+        <div class="map-toolbar">
+          <div class="map-mode-toggle">
+            <button id="mode-pins" class="map-btn active" title="Show individual connection markers on the map" aria-label="Pins mode">Pins</button>
+            <button id="mode-heatmap" class="map-btn" title="Show traffic density as a heatmap instead of individual pins" aria-label="Heatmap mode">Heatmap</button>
+          </div>
+
+          <div class="time-scrubber-container" title="Drag to replay past traffic — release at 'Live' to return to real-time">
+            <label for="time-scrubber">History Scrubber:</label>
+            <input type="range" id="time-scrubber" min="0" max="100" value="100" step="1" title="Drag to replay past traffic — release at 'Live' to return to real-time" aria-label="History Scrubber">
+            <span id="scrubber-label">Live</span>
+          </div>
+        </div>
+
+        <!-- Floating Protocol Map Legend Widget (Top-Right Corner) -->
+        <div id="map-legend" class="map-legend-card">
+          <div class="legend-item"><span class="legend-dot legend-https"></span>HTTPS</div>
+          <div class="legend-item"><span class="legend-dot legend-dns"></span>DNS</div>
+          <div class="legend-item"><span class="legend-dot legend-http"></span>HTTP</div>
+          <div class="legend-item"><span class="legend-dot legend-other"></span>Other</div>
+        </div>
+
+        <!-- Map Container -->
+        <div id="map" class="map-container" aria-label="OpenStreetMap Traffic Visualization"></div>
+
+        <!-- Device Location Status Bar Below Map -->
+        <div id="device-location-bar" class="device-location-bar">
+          <span class="loc-icon">📍</span>
+          <strong>Your Device Location:</strong>
+          <span id="device-location">Requesting location permission...</span>
+          <span class="loc-separator">&nbsp;&nbsp;|&nbsp;&nbsp;</span>
+          <span id="device-ip">Detecting IP...</span>
+        </div>
+      </section>
+
+      <!-- Collapsible / Resizable Side Panel -->
+      <aside class="side-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Active Connections</h2>
+            <div class="panel-subtitle">Remote endpoints your traffic is reaching</div>
+          </div>
+          <span id="conn-count" class="count-badge">0</span>
+        </div>
+
+        <!-- Analytics Charts & Destinations Section -->
+        <div class="analytics-section">
+          <div class="charts-grid">
+            <div class="chart-card">
+              <div class="chart-title">Services Split</div>
+              <div class="chart-canvas-container">
+                <canvas id="chart-services"></canvas>
+              </div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">Top Countries</div>
+              <div class="chart-canvas-container">
+                <canvas id="chart-countries"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Top Destinations List -->
+          <div class="destinations-card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div class="chart-title">Top Destinations</div>
+              <span class="accuracy-note">Location accuracy: City-level (IP Geolocation)</span>
+            </div>
+            <div id="top-destinations-list" class="destinations-list">
+              <div class="dest-empty">No active destination traffic</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filter & Search Controls -->
+        <div class="filter-box">
+          <input type="text" id="table-search" placeholder="Search IP, Country, Service, ASN..." aria-label="Search connections table">
+        </div>
+
+        <!-- Live Connections Table -->
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th data-sort="remote_ip">Remote IP</th>
+                <th data-sort="country">Location</th>
+                <th data-sort="asn">ASN / Org</th>
+                <th data-sort="service">Service</th>
+                <th data-sort="bytes">Data (KB)</th>
+                <th data-sort="timestamp">Time</th>
+              </tr>
+            </thead>
+            <tbody id="connections-tbody">
+              <tr class="empty-row">
+                <td colspan="6">No active traffic. Click "Start Capture" to begin monitoring connections.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Live Activity Ticker Feed Below Map -->
+    <section class="live-feed-section">
+      <div class="feed-header">
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <div class="radar-pulse" style="width:10px; height:10px;"></div>
+          <h3 style="margin:0; font-size:0.95rem;">Live Activity Stream</h3>
+        </div>
+        <span class="feed-subtitle">Real-time human-readable traffic ticker</span>
+      </div>
+      <div id="live-feed-container" class="live-feed-container">
+        <div class="feed-empty">No activity yet. Click "Start Capture" to view live traffic stream.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Watchlist Config Modal -->
+  <div id="modal-watchlist" class="modal hidden">
+    <div class="modal-content">
+      <h3>Configure Watchlist Alerts</h3>
+      <p>Enter IP substrings, Country names, or ASN orgs to trigger sound & toast alerts:</p>
+      <textarea id="watchlist-input" rows="5" placeholder="e.g. Russia, China, Cloudflare, 1.1.1.1"></textarea>
+      <div class="modal-actions">
+        <button id="btn-save-watchlist" class="btn btn-primary">Save Rules</button>
+        <button id="btn-close-watchlist" class="btn btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Session Summary Modal -->
+  <div id="modal-summary" class="modal hidden">
+    <div class="modal-content">
+      <h3>Capture Session Wrap-up</h3>
+      <p>Here is a summary of the session just completed:</p>
+      <div class="summary-grid">
+        <div class="summary-item"><span class="summary-label">Duration:</span> <strong id="sum-duration">0s</strong></div>
+        <div class="summary-item"><span class="summary-label">Total Packets:</span> <strong id="sum-packets">0</strong></div>
+        <div class="summary-item"><span class="summary-label">Unique IPs:</span> <strong id="sum-ips">0</strong></div>
+        <div class="summary-item"><span class="summary-label">Countries Touched:</span> <strong id="sum-countries">0</strong></div>
+      </div>
+      <div class="modal-actions" style="margin-top: 1.25rem;">
+        <button id="btn-close-summary" class="btn btn-primary">Close Summary</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IP Detail Drill-Down Modal -->
+  <div id="modal-ip-detail" class="modal hidden">
+    <div class="modal-content" style="max-width: 520px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-color); padding-bottom:0.5rem; margin-bottom:0.75rem;">
+        <h3 style="margin:0;"><span id="detail-ip">1.1.1.1</span></h3>
+        <span id="detail-badge-country" class="count-badge" style="background:#0284c7; color:#fff;">United States</span>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-item"><label>ASN / Org</label><span id="detail-asn">Cloudflare</span></div>
+        <div class="detail-item"><label>Service</label><span id="detail-service">DNS</span></div>
+        <div class="detail-item"><label>Total Bytes</label><span id="detail-bytes">12.4 KB</span></div>
+        <div class="detail-item"><label>Last Activity</label><span id="detail-time">10:15:22 AM</span></div>
+      </div>
+      <div style="margin-top:0.75rem;">
+        <label style="font-size:0.72rem; color:var(--text-muted); text-transform:uppercase; font-weight:600;">Connection Details Log</label>
+        <div class="detail-table-container">
+          <table class="data-table" style="font-size:0.75rem;">
+            <thead>
+              <tr>
+                <th>Protocol</th>
+                <th>Port</th>
+                <th>Transfer Size</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody id="detail-packets-tbody">
+              <tr><td colspan="4" style="text-align:center; color:var(--text-muted);">No connection records</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-actions" style="margin-top: 1rem;">
+        <button id="btn-close-detail" class="btn btn-secondary">Close Details</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screen Reader ARIA Live Region -->
+  <div id="aria-announcer" class="sr-only" aria-live="assertive"></div>
+
+  <!-- Chart.js, Leaflet Core & Plugin Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet-curve@1.0.0/leaflet.curve.min.js"></script>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  geotraffic-app:
+    build: .
+    container_name: geotraffic_app
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      - BIND_HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      - ./traffic.db:/app/traffic.db
+      - ./.env:/app/.env
+    restart: unless-stopped
