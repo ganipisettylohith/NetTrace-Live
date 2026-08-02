@@ -15,6 +15,8 @@ class Settings:
         if origin.strip()
     ]
 
+    DEV_MODE: bool = os.getenv("DEV_MODE", "false").lower() in ("true", "1", "yes")
+
     NETWORK_INTERFACE: str = os.getenv("NETWORK_INTERFACE", "")
     BPF_FILTER: str = os.getenv("BPF_FILTER", "")
     MAX_QUEUE_SIZE: int = int(os.getenv("MAX_QUEUE_SIZE", "10000"))
@@ -30,3 +32,10 @@ class Settings:
     LOCAL_LNG: float = float(os.getenv("LOCAL_LNG", "-122.4194"))
 
 settings = Settings()
+
+if not settings.API_TOKEN and not settings.DEV_MODE:
+    raise ValueError(
+        "CRITICAL SECURITY ERROR: API_TOKEN is empty and DEV_MODE is false/not set. "
+        "Please specify a secure API_TOKEN in your environment or .env file, or set DEV_MODE=true for local development."
+    )
+

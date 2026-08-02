@@ -17,7 +17,44 @@ logging.basicConfig(
     level=logging.INFO,
     format='{"time": "%(asctime)s", "level": "%(levelname)s", "module": "%(name)s", "message": "%(message)s"}'
 )
+import asyncio
+import collections
+import time
+
 logger = logging.getLogger(__name__)
+
+async def _retention_loop():
+    while True:
+        await asyncio.sleep(3600)  # every hour
+        try:
+            prune_old_connections(settings.RETENTION_HOURS)
+            logger.info(f"Pruned connections older than {settings.RETENTION_HOURS}h")
+        except Exception as e:
+            logger.error(f"Retention prune failed: {e}")
+
+class TokenBucketRateLimiter:
+    def __init__(self, rate: float, capacity: float):
+        self.rate = rate  # tokens per second
+        self.capacity = capacity
+        self.buckets = collections.defaultdict(lambda: capacity)
+        self.last_check = collections.defaultdict(time.time)
+
+    def consume(self, client_ip: str, tokens: int = 1) -> bool:
+        now = time.time()
+        elapsed = now - self.last_check[client_ip]
+        self.last_check[client_ip] = now
+        
+        current_tokens = self.buckets[client_ip]
+        current_tokens = min(self.capacity, current_tokens + elapsed * self.rate)
+        
+        if current_tokens >= tokens:
+            self.buckets[client_ip] = current_tokens - tokens
+            return True
+        else:
+            self.buckets[client_ip] = current_tokens
+            return False
+
+nominatim_limiter = TokenBucketRateLimiter(rate=0.5, capacity=3)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,12 +71,20 @@ async def lifespan(app: FastAPI):
     logger.info("Starting WebSocket broadcaster...")
     await broadcaster.start()
 
+    logger.info("Starting background retention pruner task...")
+    retention_task = asyncio.create_task(_retention_loop())
+
     logger.info("Packet capture engine initialized (idle/stopped)")
 
     yield
 
     # Shutdown cleanup
     logger.info("Shutting down backend service...")
+    retention_task.cancel()
+    try:
+        await retention_task
+    except asyncio.CancelledError:
+        pass
     capture_engine.stop()
     enrichment_worker.stop()
     await broadcaster.stop()
@@ -51,10 +96,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Configure CORS
+# Configure CORS (Require explicit origins, reject wildcard)
+if not settings.CORS_ORIGINS:
+    raise ValueError("CORS_ORIGINS must be explicitly defined. Wildcard '*' is not allowed when credentials are enabled.")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS if settings.CORS_ORIGINS else ["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +113,8 @@ def verify_token(x_token: str = Header(None), token: str = Query(None)):
         auth_token = x_token or token
         if auth_token != settings.API_TOKEN:
             raise HTTPException(status_code=401, detail="Invalid API Token")
+    elif not settings.DEV_MODE:
+        raise HTTPException(status_code=401, detail="API Token required but not configured.")
 
 @app.get("/api/config")
 def get_config():
@@ -115,7 +165,17 @@ def get_whoami(request: Request):
 import requests
 
 @app.get("/api/reverse-geocode")
-def reverse_geocode(lat: float = Query(...), lng: float = Query(...)):
+def reverse_geocode(request: Request, lat: float = Query(...), lng: float = Query(...)):
+    # Rate limit based on client IP
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    if x_forwarded_for:
+        client_ip = x_forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "127.0.0.1"
+
+    if not nominatim_limiter.consume(client_ip):
+        raise HTTPException(status_code=429, detail="Too many reverse geocoding requests. Please wait.")
+
     try:
         url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lng}&zoom=18"
         headers = {"User-Agent": "GeoTrafficLiveDashboard/1.0 (network-monitoring-app)"}
@@ -164,11 +224,13 @@ def get_health():
 @app.post("/api/capture/start", dependencies=[Depends(verify_token)])
 async def start_capture(
     interface: str = Query(""),
-    duration_seconds: int = Query(0, ge=0)
+    duration_seconds: int = Query(0, ge=0),
+    demo_mode: bool = Query(False)
 ):
     capture_engine.start(
         interface=interface,
         duration_seconds=duration_seconds,
+        demo_mode=demo_mode,
         broadcast_cb=broadcaster.broadcast_status
     )
     await broadcaster.broadcast_status({

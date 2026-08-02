@@ -18,6 +18,17 @@
 </head>
 <body>
   <div id="app" class="dashboard-container">
+    <!-- Persistent High-Visibility Demo Banner -->
+    <div id="demo-banner" class="demo-banner hidden">
+      <span>⚠️ DEMO MODE — Showing Simulated Traffic, Not Real Network Data</span>
+    </div>
+
+    <!-- System Banner for Errors -->
+    <div id="system-banner" class="system-banner hidden">
+      <span id="system-banner-text"></span>
+      <button id="btn-close-banner" class="btn-close">&times;</button>
+    </div>
+
     <!-- Top Header Bar -->
     <header class="header-bar">
       <div class="logo-group">
@@ -30,40 +41,53 @@
         <span id="ws-badge" class="badge badge-offline">WS Offline</span>
       </div>
 
-      <div class="controls-group">
-        <!-- Interface Selector or Replay Badge -->
-        <div id="interface-container">
-          <select id="select-interface" class="control-select" aria-label="Select Network Interface">
-            <option value="">Loading interfaces...</option>
+      <div class="controls-container">
+        <!-- Primary Action Cluster -->
+        <div class="primary-controls">
+          <!-- Capture Source Selector -->
+          <select id="select-source" class="control-select" aria-label="Select Capture Source">
+            <option value="live">Live Capture</option>
+            <option value="demo">Demo Mode</option>
+            <option value="replay">PCAP Replay</option>
           </select>
-          <span id="replay-badge" class="badge badge-info hidden">Replay Mode</span>
+
+          <!-- Interface Selector or Replay Badge -->
+          <div id="interface-container">
+            <select id="select-interface" class="control-select" aria-label="Select Network Interface">
+              <option value="">Loading interfaces...</option>
+            </select>
+            <span id="replay-badge" class="badge badge-info hidden">Replay Mode</span>
+          </div>
+
+          <!-- Duration Limit Selector -->
+          <select id="select-duration" class="control-select" aria-label="Select Capture Duration Limit">
+            <option value="0">Run: Unlimited</option>
+            <option value="30">Run: 30s</option>
+            <option value="60">Run: 1 min</option>
+            <option value="300">Run: 5 min</option>
+            <option value="900">Run: 15 min</option>
+          </select>
+
+          <!-- Unified Start/Stop Capture Toggle Button -->
+          <button id="btn-capture-toggle" class="btn btn-success" aria-label="Start or Stop Packet Capture">
+            <svg id="capture-icon" class="icon" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+            <span id="capture-toggle-text">Start Capture</span>
+          </button>
+
+          <!-- Live Counter & Timer Widget -->
+          <div id="live-capture-widget" class="live-widget hidden">
+            <span id="widget-pkt-count" class="widget-badge">Pkts: 0</span>
+            <span id="widget-timer" class="widget-badge widget-timer hidden">⏱ 00:00</span>
+          </div>
         </div>
 
-        <!-- Duration Limit Selector -->
-        <select id="select-duration" class="control-select" aria-label="Select Capture Duration Limit">
-          <option value="0">Run: Unlimited</option>
-          <option value="30">Run: 30s</option>
-          <option value="60">Run: 1 min</option>
-          <option value="300">Run: 5 min</option>
-          <option value="900">Run: 15 min</option>
-        </select>
-
-        <!-- Unified Start/Stop Capture Toggle Button -->
-        <button id="btn-capture-toggle" class="btn btn-success" aria-label="Start or Stop Packet Capture">
-          <svg id="capture-icon" class="icon" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
-          <span id="capture-toggle-text">Start Capture</span>
-        </button>
-
-        <!-- Live Counter & Timer Widget -->
-        <div id="live-capture-widget" class="live-widget hidden">
-          <span id="widget-pkt-count" class="widget-badge">Pkts: 0</span>
-          <span id="widget-timer" class="widget-badge widget-timer hidden">⏱ 00:00</span>
+        <!-- Secondary Utility Cluster -->
+        <div class="secondary-controls">
+          <button id="btn-clear" class="btn btn-secondary" aria-label="Clear Dashboard View">Clear</button>
+          <button id="btn-export" class="btn btn-secondary" aria-label="Export CSV Log">Export CSV</button>
+          <button id="btn-watchlist" class="btn btn-secondary" aria-label="Configure Watchlist Alerts">Watchlist</button>
+          <button id="btn-theme" class="btn btn-icon" aria-label="Toggle Dark Light Theme">☀️</button>
         </div>
-
-        <button id="btn-clear" class="btn btn-secondary" aria-label="Clear Dashboard View">Clear</button>
-        <button id="btn-export" class="btn btn-secondary" aria-label="Export CSV Log">Export CSV</button>
-        <button id="btn-watchlist" class="btn btn-secondary" aria-label="Configure Watchlist Alerts">Watchlist</button>
-        <button id="btn-theme" class="btn btn-icon" aria-label="Toggle Dark Light Theme">☀️</button>
       </div>
     </header>
 
@@ -137,6 +161,17 @@
             <div class="panel-subtitle">Remote endpoints your traffic is reaching</div>
           </div>
           <span id="conn-count" class="count-badge">0</span>
+        </div>
+
+        <!-- Watchlist Alerts Panel -->
+        <div id="alerts-panel" class="alerts-panel-card hidden">
+          <div class="chart-title" style="display:flex; justify-content:space-between; align-items:center; color: var(--error-color);">
+            <span>⚠️ WATCHLIST ALERTS</span>
+            <button id="btn-clear-alerts" class="btn btn-secondary" style="font-size:0.65rem; padding: 0.15rem 0.4rem;">Clear Alerts</button>
+          </div>
+          <div id="alerts-list" class="alerts-list">
+            <!-- Alerts populated dynamically -->
+          </div>
         </div>
 
         <!-- Analytics Charts & Destinations Section -->

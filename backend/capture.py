@@ -54,7 +54,7 @@ class CaptureEngine:
         self.stop_timestamp = 0
         self.selected_interface = ""
 
-    def start(self, interface: str = "", duration_seconds: int = 0, broadcast_cb=None):
+    def start(self, interface: str = "", duration_seconds: int = 0, demo_mode: bool = False, broadcast_cb=None):
         if self.is_running:
             return
 
@@ -93,7 +93,11 @@ class CaptureEngine:
         else:
             self.stop_timestamp = 0
 
-        if settings.REPLAY_PCAP_PATH and Path(settings.REPLAY_PCAP_PATH).exists():
+        if demo_mode:
+            self.thread = threading.Thread(target=self._run_demo_mode, daemon=True)
+            self.status = "capturing"
+            logger.info("Starting demo mode packet stream")
+        elif settings.REPLAY_PCAP_PATH and Path(settings.REPLAY_PCAP_PATH).exists():
             self.thread = threading.Thread(target=self._run_pcap_replay, daemon=True)
             self.status = "replaying"
             logger.info(f"Starting PCAP replay from {settings.REPLAY_PCAP_PATH}")
@@ -173,10 +177,30 @@ class CaptureEngine:
             logger.debug(f"Packet parsing error: {e}")
 
     def _run_live_sniff(self):
-        # Run seamless packet capture engine (bypasses OS kernel driver hooks, eliminating all admin/UAC prompts)
-        self._run_simulated_capture()
+        if not HAS_SCAPY:
+            logger.error("Scapy not available — cannot perform live capture.")
+            self.status = "error"
+            self.error_message = "Scapy is not installed. Live capture unavailable."
+            return
 
-    def _run_simulated_capture(self):
+        try:
+            sniff(
+                iface=self.selected_interface or None,
+                filter=settings.BPF_FILTER or None,
+                prn=self._process_packet,
+                stop_filter=lambda pkt: not self.is_running,
+                store=False
+            )
+        except PermissionError:
+            logger.error("Live capture requires elevated privileges (run as root/Administrator).")
+            self.status = "error"
+            self.error_message = "Live capture requires administrator/root privileges. Run the app elevated, or use PCAP replay mode instead."
+        except Exception as e:
+            logger.error(f"Live capture failed: {e}")
+            self.status = "error"
+            self.error_message = f"Capture failed: {e}"
+
+    def _run_demo_mode(self):
         logger.info("Running seamless packet stream engine.")
         self.status = "capturing"
         self.error_message = ""
@@ -215,8 +239,15 @@ class CaptureEngine:
             time.sleep(random.uniform(0.15, 0.45))
 
     def _run_pcap_replay(self):
-        if not HAS_SCAPY or not settings.REPLAY_PCAP_PATH or not Path(settings.REPLAY_PCAP_PATH).exists():
-            self._run_simulated_capture()
+        if not HAS_SCAPY:
+            logger.error("Scapy not available — cannot perform PCAP replay.")
+            self.status = "error"
+            self.error_message = "Scapy is not installed. PCAP replay unavailable."
+            return
+        if not settings.REPLAY_PCAP_PATH or not Path(settings.REPLAY_PCAP_PATH).exists():
+            logger.error(f"PCAP file not found at {settings.REPLAY_PCAP_PATH}")
+            self.status = "error"
+            self.error_message = f"PCAP file not found at {settings.REPLAY_PCAP_PATH}"
             return
 
         pcap_path = settings.REPLAY_PCAP_PATH

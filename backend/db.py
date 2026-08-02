@@ -176,9 +176,19 @@ def export_connections(fmt: str = "json"):
             if not rows:
                 return ""
             output = io.StringIO()
+            sanitized_rows = []
+            for row in rows:
+                sanitized_row = {}
+                for k, v in row.items():
+                    if isinstance(v, str) and v and v[0] in ('=', '+', '-', '@'):
+                        sanitized_row[k] = "'" + v
+                    else:
+                        sanitized_row[k] = v
+                sanitized_rows.append(sanitized_row)
+            
             writer = csv.DictWriter(output, fieldnames=rows[0].keys())
             writer.writeheader()
-            writer.writerows(rows)
+            writer.writerows(sanitized_rows)
             return output.getvalue()
         else:
             return json.dumps(rows, indent=2)

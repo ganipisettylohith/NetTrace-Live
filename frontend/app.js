@@ -15,6 +15,10 @@ let config = {};
 let connectionsStore = [];
 let watchlist = [];
 let throughputHistory = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+let prevPackets = 0;
+let prevUniqueIps = 0;
+let prevCountries = 0;
+
 let heatmapLayer = null;
 let mapMode = 'pins';
 let timeScrubberCutoff = 0;
@@ -88,8 +92,32 @@ async function loadConfig() {
 async function fetchInterfaces() {
   const select = document.getElementById('select-interface');
   const replayBadge = document.getElementById('replay-badge');
+  const selectSource = document.getElementById('select-source');
+
+  // Handle capture source dropdown changes
+  if (selectSource) {
+    selectSource.addEventListener('change', () => {
+      const source = selectSource.value;
+      const demoBanner = document.getElementById('demo-banner');
+      const ifaceContainer = document.getElementById('interface-container');
+      
+      if (source === 'demo') {
+        if (demoBanner) demoBanner.classList.remove('hidden');
+        if (ifaceContainer) ifaceContainer.classList.add('hidden');
+      } else {
+        if (demoBanner) demoBanner.classList.add('hidden');
+        if (ifaceContainer) ifaceContainer.classList.remove('hidden');
+      }
+    });
+  }
 
   if (config.is_pcap_replay) {
+    if (selectSource) {
+      selectSource.value = 'replay';
+      Array.from(selectSource.options).forEach(opt => {
+        if (opt.value !== 'replay') opt.disabled = true;
+      });
+    }
     if (select) {
       select.classList.add('hidden');
       select.style.display = 'none';
@@ -804,9 +832,23 @@ function updateHealthStatus(statusData) {
   const captureIcon = document.getElementById('capture-icon');
   const selectIface = document.getElementById('select-interface');
   const selectDuration = document.getElementById('select-duration');
+  const selectSource = document.getElementById('select-source');
   const liveWidget = document.getElementById('live-capture-widget');
 
   const isRunning = (captureStatus === 'capturing' || captureStatus === 'replaying');
+
+  // Handle capture error visibility
+  const systemBanner = document.getElementById('system-banner');
+  const systemBannerText = document.getElementById('system-banner-text');
+  if (systemBanner && systemBannerText) {
+    if (captureStatus === 'error' && statusData.error_message) {
+      systemBannerText.textContent = statusData.error_message;
+      systemBanner.className = 'system-banner error';
+      systemBanner.classList.remove('hidden');
+    } else {
+      systemBanner.classList.add('hidden');
+    }
+  }
 
   if (healthBadge) {
     healthBadge.textContent = captureStatus.toUpperCase();
@@ -826,6 +868,7 @@ function updateHealthStatus(statusData) {
       if (captureIcon) captureIcon.innerHTML = `<path fill="currentColor" d="M6 6h12v12H6z"/>`;
       if (selectIface) selectIface.disabled = true;
       if (selectDuration) selectDuration.disabled = true;
+      if (selectSource) selectSource.disabled = true;
       if (liveWidget) liveWidget.classList.remove('hidden');
       startCountdownTimer();
     } else {
@@ -834,9 +877,11 @@ function updateHealthStatus(statusData) {
       if (captureIcon) captureIcon.innerHTML = `<path fill="currentColor" d="M8 5v14l11-7z"/>`;
       if (selectIface) selectIface.disabled = false;
       if (selectDuration) selectDuration.disabled = false;
+      if (selectSource) selectSource.disabled = false;
       stopCountdownTimer();
     }
   }
+
 
   if ((previousStatus === 'capturing' || previousStatus === 'replaying') && (captureStatus === 'stopped' || statusData.auto_stopped)) {
     showSessionSummary();
@@ -928,9 +973,12 @@ async function toggleCapture() {
   } else {
     const selectIface = document.getElementById('select-interface');
     const selectDuration = document.getElementById('select-duration');
+    const selectSource = document.getElementById('select-source');
 
     const iface = selectIface ? selectIface.value : '';
     const duration = selectDuration ? parseInt(selectDuration.value, 10) : 0;
+    const source = selectSource ? selectSource.value : 'live';
+    const demoMode = (source === 'demo');
 
     if (iface) localStorage.setItem('geo_last_interface', iface);
     localStorage.setItem('geo_last_duration', duration.toString());
@@ -939,7 +987,7 @@ async function toggleCapture() {
     setInFlightState(true);
 
     try {
-      const url = `/api/capture/start?interface=${encodeURIComponent(iface)}&duration_seconds=${duration}`;
+      const url = `/api/capture/start?interface=${encodeURIComponent(iface)}&duration_seconds=${duration}&demo_mode=${demoMode}`;
       const res = await fetch(url, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
@@ -953,6 +1001,7 @@ async function toggleCapture() {
     } finally {
       setInFlightState(false);
     }
+
   }
 }
 
@@ -1070,18 +1119,45 @@ function renderTable() {
   }).join('');
 }
 
+function animateValue(id, start, end, duration) {
+  const obj = document.getElementById(id);
+  if (!obj) return;
+  if (start === end) {
+    obj.textContent = end;
+    return;
+  }
+  let startTimestamp = null;
+  const step = (timestamp) => {
+    if (!startTimestamp) startTimestamp = timestamp;
+    const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+    obj.textContent = Math.floor(progress * (end - start) + start);
+    if (progress < 1) {
+      window.requestAnimationFrame(step);
+    } else {
+      obj.textContent = end;
+    }
+  };
+  window.requestAnimationFrame(step);
+}
+
 function updateStatsHeader() {
   const filtered = getFilteredConnections();
-  document.getElementById('stat-packets').textContent = filtered.length;
+  const newPackets = filtered.length;
   const totalBytes = filtered.reduce((acc, c) => acc + (c.bytes || (c.byte_count || 0)), 0);
   document.getElementById('stat-bytes').textContent = `${(totalBytes / (1024 * 1024)).toFixed(2)} MB`;
 
-  const uniqueIps = new Set(filtered.map(c => c.remote_ip || c.dst_ip)).size;
-  document.getElementById('stat-ips').textContent = uniqueIps;
+  const newUniqueIps = new Set(filtered.map(c => c.remote_ip || c.dst_ip)).size;
+  const newCountries = new Set(filtered.map(c => c.country)).size;
 
-  const countries = new Set(filtered.map(c => c.country)).size;
-  document.getElementById('stat-countries').textContent = countries;
+  animateValue('stat-packets', prevPackets, newPackets, 400);
+  animateValue('stat-ips', prevUniqueIps, newUniqueIps, 400);
+  animateValue('stat-countries', prevCountries, newCountries, 400);
+
+  prevPackets = newPackets;
+  prevUniqueIps = newUniqueIps;
+  prevCountries = newCountries;
 }
+
 
 function updateStatsFromApi(stats) {
   document.getElementById('stat-dropped').textContent = `${stats.dropped_packets || 0} dropped`;
@@ -1118,14 +1194,51 @@ function updateSparkline(kbVal) {
 function checkWatchlist(conn) {
   if (!watchlist || watchlist.length === 0) return;
   const ip = conn.remote_ip || conn.dst_ip || '';
-  const str = `${ip} ${conn.country} ${conn.asn}`.toLowerCase();
+  const country = conn.country || 'Unknown';
+  const asn = conn.asn || 'Unknown';
+  const str = `${ip} ${country} ${asn}`.toLowerCase();
   const match = watchlist.some(rule => rule && str.includes(rule.toLowerCase()));
   if (match) {
     announceAria(`Watchlist match detected for ${ip} (${conn.country})`);
+    
+    // Add to Watchlist Alerts Panel
+    const alertsPanel = document.getElementById('alerts-panel');
+    const alertsList = document.getElementById('alerts-list');
+    if (alertsPanel && alertsList) {
+      alertsPanel.classList.remove('hidden');
+      const div = document.createElement('div');
+      div.className = 'alert-item';
+      const timeStr = new Date().toLocaleTimeString();
+      div.innerHTML = `<span>🚨 <strong>${ip}</strong> (${country}) - Matched watchlist rule</span><span style="font-size:0.7rem; opacity: 0.8;">${timeStr}</span>`;
+      alertsList.insertBefore(div, alertsList.firstChild);
+      
+      while (alertsList.children.length > 50) {
+        alertsList.removeChild(alertsList.lastChild);
+      }
+    }
   }
 }
 
+
 function initEventListeners() {
+  const closeBannerBtn = document.getElementById('btn-close-banner');
+  if (closeBannerBtn) {
+    closeBannerBtn.addEventListener('click', () => {
+      const banner = document.getElementById('system-banner');
+      if (banner) banner.classList.add('hidden');
+    });
+  }
+
+  const clearAlertsBtn = document.getElementById('btn-clear-alerts');
+  if (clearAlertsBtn) {
+    clearAlertsBtn.addEventListener('click', () => {
+      const alertsList = document.getElementById('alerts-list');
+      if (alertsList) alertsList.innerHTML = '';
+      const alertsPanel = document.getElementById('alerts-panel');
+      if (alertsPanel) alertsPanel.classList.add('hidden');
+    });
+  }
+
   document.getElementById('btn-theme').addEventListener('click', toggleTheme);
 
   document.getElementById('btn-capture-toggle').addEventListener('click', toggleCapture);
@@ -1137,6 +1250,9 @@ function initEventListeners() {
   document.getElementById('btn-clear').addEventListener('click', () => {
     connectionsStore = [];
     packetsProcessed = 0;
+    prevPackets = 0;
+    prevUniqueIps = 0;
+    prevCountries = 0;
     polylines.forEach(p => {
       if (map && map.hasLayer(p)) map.removeLayer(p);
     });
@@ -1146,6 +1262,13 @@ function initEventListeners() {
     if (heatmapLayer && map && map.hasLayer(heatmapLayer)) map.removeLayer(heatmapLayer);
     const feedContainer = document.getElementById('live-feed-container');
     if (feedContainer) feedContainer.innerHTML = `<div class="feed-empty">No activity yet. Click "Start Capture" to view live traffic stream.</div>`;
+    
+    // Clear watchlist alerts too
+    const alertsList = document.getElementById('alerts-list');
+    if (alertsList) alertsList.innerHTML = '';
+    const alertsPanel = document.getElementById('alerts-panel');
+    if (alertsPanel) alertsPanel.classList.add('hidden');
+
     renderTable();
     updateStatsHeader();
     updateAnalyticsCharts();
@@ -1158,6 +1281,7 @@ function initEventListeners() {
 
   document.getElementById('btn-watchlist').addEventListener('click', () => {
     document.getElementById('modal-watchlist').classList.remove('hidden');
+
   });
 
   document.getElementById('btn-close-watchlist').addEventListener('click', () => {
