@@ -18,6 +18,10 @@ let throughputHistory = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 let prevPackets = 0;
 let prevUniqueIps = 0;
 let prevCountries = 0;
+let globeInstance = null;
+let localAccuracyCircle = null;
+
+
 
 let heatmapLayer = null;
 let mapMode = 'pins';
@@ -45,6 +49,16 @@ document.addEventListener('DOMContentLoaded', () => {
   initCharts();
   requestDeviceLocation();
   initKeyboardShortcuts();
+
+  // Bulletproof Map size validation loop on load
+  let invalidateCount = 0;
+  const invalidateInterval = setInterval(() => {
+    if (map) {
+      map.invalidateSize();
+    }
+    invalidateCount++;
+    if (invalidateCount > 6) clearInterval(invalidateInterval);
+  }, 800);
 
   // Load async API configuration and WebSocket cleanly
   loadConfig().then(() => {
@@ -169,9 +183,11 @@ async function fetchInterfaces() {
 function requestDeviceLocation() {
   const ipEl = document.getElementById('device-ip');
   const locEl = document.getElementById('device-location');
+  const preciseBtn = document.getElementById('btn-precise-loc');
 
   if (locEl) locEl.textContent = 'Awaiting location permission...';
 
+  // First resolve approximate IP location immediately
   fetch('/api/whoami')
     .then(res => res.json())
     .then(data => {
@@ -181,75 +197,76 @@ function requestDeviceLocation() {
       ipLocationStr = data.formatted_location || 'Detected Location';
 
       if (ipEl) ipEl.textContent = `IP: ${deviceIp}`;
+      if (locEl) locEl.textContent = ipLocationStr;
+      
+      if (ipLat && ipLng) {
+        updateDeviceMarker(ipLat, ipLng, deviceIp, ipLocationStr, true, 5000);
+      }
+
+      // Show precise geolocator trigger if not already denied
+      if (preciseBtn && localStorage.getItem('geo_precise_denied') !== 'true') {
+        preciseBtn.classList.remove('hidden');
+      }
     })
     .catch(err => {
       console.error('whoami error:', err);
     });
-
-  if ('geolocation' in navigator) {
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-
-        fetch(`/api/reverse-geocode?lat=${lat}&lng=${lng}`)
-          .then(r => r.json())
-          .then(data => {
-            if (data.status === 'ok' && data.formatted_address) {
-              if (locEl) locEl.textContent = data.formatted_address;
-              updateDeviceMarker(lat, lng, deviceIp, data.formatted_address, true);
-            } else {
-              fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18`)
-                .then(r => r.json())
-                .then(geoData => {
-                  const addr = geoData.address || {};
-                  const road = addr.road || addr.street || addr.pedestrian || '';
-                  const suburb = addr.suburb || addr.neighbourhood || addr.residential || addr.quarter || addr.subdivision || '';
-                  const city = addr.city || addr.town || addr.village || addr.city_district || addr.county || '';
-                  const state = addr.state || addr.region || '';
-                  const country = addr.country || '';
-
-                  const parts = [road, suburb, city, state, country].filter(Boolean);
-                  const preciseAddress = parts.length > 0 ? parts.join(', ') : ipLocationStr;
-
-                  if (locEl) locEl.textContent = preciseAddress;
-                  updateDeviceMarker(lat, lng, deviceIp, preciseAddress, true);
-                })
-                .catch(() => {
-                  if (locEl) locEl.textContent = ipLocationStr;
-                  updateDeviceMarker(lat, lng, deviceIp, ipLocationStr, true);
-                });
-            }
-          })
-          .catch(() => {
-            if (locEl) locEl.textContent = ipLocationStr;
-            updateDeviceMarker(lat, lng, deviceIp, ipLocationStr, true);
-          });
-      },
-      (error) => {
-        console.log('GPS Geolocation permission fallback to IP location:', error);
-        if (locEl) locEl.textContent = ipLocationStr || 'Location Permission Denied';
-        if (ipLat && ipLng) {
-          updateDeviceMarker(ipLat, ipLng, deviceIp, ipLocationStr, true);
-        }
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
-    );
-  }
 }
 
-function updateDeviceMarker(lat, lng, labelIp, labelLoc, shouldFly = true) {
+function requestPreciseLocation() {
+  const locEl = document.getElementById('device-location');
+  const preciseBtn = document.getElementById('btn-precise-loc');
+  
+  if (!navigator.geolocation) {
+    if (preciseBtn) preciseBtn.classList.add('hidden');
+    return;
+  }
+
+  if (locEl) locEl.textContent = 'Requesting GPS precision...';
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+
+      fetch(`/api/reverse-geocode?lat=${lat}&lng=${lng}`)
+        .then(r => r.json())
+        .then(data => {
+          const preciseAddress = (data.status === 'ok' && data.formatted_address) ? data.formatted_address : 'Precise Location';
+          if (locEl) locEl.textContent = preciseAddress;
+          updateDeviceMarker(lat, lng, deviceIp, preciseAddress, true, 100);
+          if (preciseBtn) preciseBtn.classList.add('hidden');
+        })
+        .catch(() => {
+          if (locEl) locEl.textContent = 'Precise Location';
+          updateDeviceMarker(lat, lng, deviceIp, 'Precise Location', true, 100);
+          if (preciseBtn) preciseBtn.classList.add('hidden');
+        });
+    },
+    (error) => {
+      console.info("Geolocation unavailable, using IP-based location:", error.message);
+      localStorage.setItem('geo_precise_denied', 'true');
+      if (preciseBtn) preciseBtn.classList.add('hidden');
+      if (locEl) locEl.textContent = ipLocationStr || 'Approximate Location';
+    },
+    { enableHighAccuracy: false, timeout: 5000 }
+  );
+}
+
+
+
+function updateDeviceMarker(lat, lng, labelIp, labelLoc, shouldFly = true, accuracy = 5000) {
   if (!map || !lat || !lng) return;
   const pos = [lat, lng];
 
   const deviceIcon = L.divIcon({
-    className: 'custom-visitor-pin',
+    className: 'local-origin-marker',
     html: `
-      <div class="visitor-ring"></div>
-      <div style="background-color: #0284c7; width: 18px; height: 18px; border-radius: 50%; border: 3px solid #ffffff; box-shadow: 0 0 14px #38bdf8;"></div>
+      <div class="local-dot-pulse"></div>
+      <div class="local-dot-core"></div>
     `,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9]
+    iconSize: [24, 24],
+    iconAnchor: [12, 12]
   });
 
   if (deviceMarker) {
@@ -265,6 +282,19 @@ function updateDeviceMarker(lat, lng, labelIp, labelLoc, shouldFly = true) {
       Location: <strong>${labelLoc}</strong>
     </div>
   `);
+
+  if (localAccuracyCircle) {
+    localAccuracyCircle.setLatLng(pos);
+    localAccuracyCircle.setRadius(accuracy);
+  } else {
+    localAccuracyCircle = L.circle(pos, {
+      radius: accuracy,
+      color: '#38bdf8',
+      fillColor: '#38bdf8',
+      fillOpacity: 0.08,
+      weight: 1
+    }).addTo(map);
+  }
 
   if (shouldFly) {
     map.flyTo(pos, 12, { animate: true, duration: 1.8 });
@@ -324,7 +354,7 @@ function initMap() {
 function createRemotePinIcon() {
   return L.divIcon({
     className: 'custom-remote-pin',
-    html: `<div style="background-color: #ef4444; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 0 10px rgba(239, 68, 68, 0.9);"></div>`,
+    html: `<div class="remote-ring"></div><div style="background-color: #ef4444; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 0 10px rgba(239, 68, 68, 0.9);"></div>`,
     iconSize: [14, 14],
     iconAnchor: [7, 7]
   });
@@ -447,6 +477,8 @@ function processConnectionBatch(batch) {
   updateStatsHeader();
   updateAnalyticsCharts();
   updateLiveWidget();
+  updateGlobeData();
+
 }
 
 function addLiveFeedEntry(conn) {
@@ -634,6 +666,101 @@ function refreshMapView() {
   }
 }
 
+function switchMapMode(newMode) {
+  const mapEl = document.getElementById('map');
+  const globeEl = document.getElementById('globe-container');
+  if (mapEl && globeEl) {
+    mapEl.classList.add('leaflet-fade-out');
+    globeEl.classList.add('leaflet-fade-out');
+    
+    setTimeout(() => {
+      mapMode = newMode;
+      
+      if (newMode === 'globe') {
+        mapEl.classList.add('hidden');
+        globeEl.classList.remove('hidden');
+        initGlobe();
+      } else {
+        globeEl.classList.add('hidden');
+        mapEl.classList.remove('hidden');
+        refreshMapView();
+      }
+      
+      mapEl.classList.remove('leaflet-fade-out');
+      globeEl.classList.remove('leaflet-fade-out');
+      mapEl.classList.add('leaflet-fade-in');
+      globeEl.classList.add('leaflet-fade-in');
+      
+      setTimeout(() => {
+        mapEl.classList.remove('leaflet-fade-in');
+        globeEl.classList.remove('leaflet-fade-in');
+      }, 250);
+    }, 250);
+  } else {
+    mapMode = newMode;
+    refreshMapView();
+  }
+}
+
+function initGlobe() {
+  if (globeInstance) return;
+  const container = document.getElementById('globe-container');
+  if (!container || typeof Globe === 'undefined') return;
+
+  globeInstance = Globe()(container)
+    .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-night.jpg')
+    .backgroundColor('rgba(0,0,0,0)')
+    .pointsData([])
+    .pointLat('lat')
+    .pointLng('lng')
+    .pointColor(() => '#38bdf8')
+    .pointAltitude(0.01)
+    .arcsData([])
+    .arcColor(() => ['#38bdf8', '#a855f7'])
+    .arcDashLength(0.4)
+    .arcDashGap(0.2)
+    .arcDashAnimateTime(1500)
+    .arcStroke(0.5);
+
+  globeInstance.controls().autoRotate = true;
+  globeInstance.controls().autoRotateSpeed = 0.5;
+
+  // Render initial arcs/points
+  updateGlobeData();
+}
+
+function updateGlobeData() {
+  if (!globeInstance) return;
+
+  const points = [];
+  const arcs = [];
+
+  const localLat = deviceMarker ? deviceMarker.getLatLng().lat : config.local_lat || 37.7749;
+  const localLng = deviceMarker ? deviceMarker.getLatLng().lng : config.local_lng || -122.4194;
+
+  // Add remote markers coordinates
+  connectionsStore.forEach(c => {
+    if (c.dst_lat && c.dst_lng) {
+      points.push({
+        lat: c.dst_lat,
+        lng: c.dst_lng,
+        name: c.remote_ip || c.dst_ip
+      });
+
+      arcs.push({
+        startLat: localLat,
+        startLng: localLng,
+        endLat: c.dst_lat,
+        endLng: c.dst_lng
+      });
+    }
+  });
+
+  globeInstance.pointsData(points);
+  globeInstance.arcsData(arcs);
+}
+
+
 function fitMapToBounds() {
   if (!map || isUserZoomedManually) return;
   const positions = [];
@@ -742,28 +869,45 @@ function updateAnalyticsCharts() {
     destinationMap[destName].bytes += (c.bytes || c.byte_count || 0);
   });
 
-  if (serviceChart) {
-    const total = httpsCount + dnsCount + httpCount + otherCount;
-    serviceChart.data.datasets[0].data = total > 0 ? [httpsCount, dnsCount, httpCount, otherCount] : [1, 0, 0, 0];
-    if (total === 0) {
-      serviceChart.data.datasets[0].backgroundColor = ['#334155', '#334155', '#334155', '#334155'];
-    } else {
-      serviceChart.data.datasets[0].backgroundColor = ['#38bdf8', '#a855f7', '#f97316', '#10b981'];
+  const servicesCanvas = document.getElementById('chart-services');
+  const countriesCanvas = document.getElementById('chart-countries');
+  const servicesEmpty = document.getElementById('chart-services-empty');
+  const countriesEmpty = document.getElementById('chart-countries-empty');
+
+  if (filtered.length === 0) {
+    if (servicesEmpty) servicesEmpty.classList.remove('hidden');
+    if (countriesEmpty) countriesEmpty.classList.remove('hidden');
+    if (servicesCanvas) servicesCanvas.style.display = 'none';
+    if (countriesCanvas) countriesCanvas.style.display = 'none';
+  } else {
+    if (servicesEmpty) servicesEmpty.classList.add('hidden');
+    if (countriesEmpty) countriesEmpty.classList.add('hidden');
+    if (servicesCanvas) servicesCanvas.style.display = 'block';
+    if (countriesCanvas) countriesCanvas.style.display = 'block';
+
+    if (serviceChart) {
+      const total = httpsCount + dnsCount + httpCount + otherCount;
+      serviceChart.data.datasets[0].data = total > 0 ? [httpsCount, dnsCount, httpCount, otherCount] : [1, 0, 0, 0];
+      if (total === 0) {
+        serviceChart.data.datasets[0].backgroundColor = ['#334155', '#334155', '#334155', '#334155'];
+      } else {
+        serviceChart.data.datasets[0].backgroundColor = ['#38bdf8', '#a855f7', '#f97316', '#10b981'];
+      }
+      serviceChart.update();
     }
-    serviceChart.update('none');
-  }
 
-  if (countryChart) {
-    const sortedCountries = Object.entries(countryCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
+    if (countryChart) {
+      const sortedCountries = Object.entries(countryCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
 
-    const labels = sortedCountries.map(e => e[0]);
-    const data = sortedCountries.map(e => e[1]);
+      const labels = sortedCountries.map(e => e[0]);
+      const data = sortedCountries.map(e => e[1]);
 
-    countryChart.data.labels = labels.length > 0 ? labels : ['--'];
-    countryChart.data.datasets[0].data = data.length > 0 ? data : [0];
-    countryChart.update('none');
+      countryChart.data.labels = labels.length > 0 ? labels : ['--'];
+      countryChart.data.datasets[0].data = data.length > 0 ? data : [0];
+      countryChart.update();
+    }
   }
 
   const destListEl = document.getElementById('top-destinations-list');
@@ -773,7 +917,11 @@ function updateAnalyticsCharts() {
       .slice(0, 5);
 
     if (sortedDestinations.length === 0) {
-      destListEl.innerHTML = `<div class="dest-empty">No active destination traffic</div>`;
+      destListEl.innerHTML = `
+        <div class="dest-empty" style="display:flex; flex-direction:column; align-items:center; gap:0.25rem; padding:0.5rem 0; opacity:0.6;">
+          <span style="font-size:1.1rem;">📍</span>
+          <span>No active destination traffic</span>
+        </div>`;
     } else {
       destListEl.innerHTML = sortedDestinations.map(([name, stat]) => `
         <div class="dest-item">
@@ -783,6 +931,7 @@ function updateAnalyticsCharts() {
       `).join('');
     }
   }
+
 }
 
 function openIpDetailModal(ipStr) {
@@ -1108,15 +1257,27 @@ function renderTable() {
 
     return `
       <tr onclick="openIpDetailModal('${remoteIp}')">
-        <td><strong>${remoteIp}</strong></td>
-        <td>${c.city || ''}${c.city && c.country ? ', ' : ''}${c.country || 'Unknown'}</td>
-        <td>${c.asn || 'Unknown'}</td>
-        <td>${c.service || 'RAW'}</td>
-        <td>${kbStr} KB</td>
-        <td>${timeStr}</td>
+        <td data-label="Remote IP"><strong>${remoteIp}</strong></td>
+        <td data-label="Location">${c.city || ''}${c.city && c.country ? ', ' : ''}${c.country || 'Unknown'}</td>
+        <td data-label="ASN / Org">${c.asn || 'Unknown'}</td>
+        <td data-label="Service">${c.service || 'RAW'}</td>
+        <td data-label="Data (KB)">${kbStr} KB</td>
+        <td data-label="Last Seen">${timeStr}</td>
       </tr>
     `;
+
   }).join('');
+}
+
+function triggerCardGlow(id) {
+  const valEl = document.getElementById(id);
+  if (valEl) {
+    const card = valEl.closest('.stat-card');
+    if (card) {
+      card.classList.add('stat-card-update');
+      setTimeout(() => card.classList.remove('stat-card-update'), 400);
+    }
+  }
 }
 
 function animateValue(id, start, end, duration) {
@@ -1149,6 +1310,10 @@ function updateStatsHeader() {
   const newUniqueIps = new Set(filtered.map(c => c.remote_ip || c.dst_ip)).size;
   const newCountries = new Set(filtered.map(c => c.country)).size;
 
+  if (newPackets !== prevPackets) triggerCardGlow('stat-packets');
+  if (newUniqueIps !== prevUniqueIps) triggerCardGlow('stat-ips');
+  if (newCountries !== prevCountries) triggerCardGlow('stat-countries');
+
   animateValue('stat-packets', prevPackets, newPackets, 400);
   animateValue('stat-ips', prevUniqueIps, newUniqueIps, 400);
   animateValue('stat-countries', prevCountries, newCountries, 400);
@@ -1157,6 +1322,7 @@ function updateStatsHeader() {
   prevUniqueIps = newUniqueIps;
   prevCountries = newCountries;
 }
+
 
 
 function updateStatsFromApi(stats) {
@@ -1170,7 +1336,11 @@ function updateSparkline(kbVal) {
   throughputHistory.push(kbVal);
   if (throughputHistory.length > 15) throughputHistory.shift();
 
+  const prevVal = parseFloat(document.getElementById('stat-throughput').textContent);
+  if (kbVal !== prevVal) triggerCardGlow('stat-throughput');
+
   document.getElementById('stat-throughput').textContent = kbVal.toFixed(1);
+
 
   const canvas = document.getElementById('sparkline-canvas');
   if (!canvas) return;
@@ -1305,19 +1475,53 @@ function initEventListeners() {
 
   document.getElementById('table-search').addEventListener('input', renderTable);
 
+  // Set default live glow on load
+  const loadLabel = document.getElementById('scrubber-label');
+  if (loadLabel) loadLabel.classList.add('live-active-glow');
+
+  const settingsBtn = document.getElementById('btn-settings');
+  if (settingsBtn) {
+    settingsBtn.addEventListener('click', () => {
+      document.getElementById('modal-watchlist').classList.remove('hidden');
+    });
+  }
+
+  const hamburgerBtn = document.getElementById('btn-hamburger');
+  const secondaryControls = document.getElementById('secondary-controls');
+  if (hamburgerBtn && secondaryControls) {
+    hamburgerBtn.addEventListener('click', () => {
+      secondaryControls.classList.toggle('show');
+    });
+  }
+
+
   document.getElementById('mode-pins').addEventListener('click', () => {
-    mapMode = 'pins';
     document.getElementById('mode-pins').classList.add('active');
     document.getElementById('mode-heatmap').classList.remove('active');
-    refreshMapView();
+    document.getElementById('mode-globe').classList.remove('active');
+    switchMapMode('pins');
   });
 
   document.getElementById('mode-heatmap').addEventListener('click', () => {
-    mapMode = 'heatmap';
     document.getElementById('mode-heatmap').classList.add('active');
     document.getElementById('mode-pins').classList.remove('active');
-    refreshMapView();
+    document.getElementById('mode-globe').classList.remove('active');
+    switchMapMode('heatmap');
   });
+
+  document.getElementById('mode-globe').addEventListener('click', () => {
+    document.getElementById('mode-globe').classList.add('active');
+    document.getElementById('mode-pins').classList.remove('active');
+    document.getElementById('mode-heatmap').classList.remove('active');
+    switchMapMode('globe');
+  });
+
+  const preciseBtn = document.getElementById('btn-precise-loc');
+  if (preciseBtn) {
+    preciseBtn.addEventListener('click', () => {
+      requestPreciseLocation();
+    });
+  }
 
   const scrubber = document.getElementById('time-scrubber');
   if (scrubber) {
@@ -1325,10 +1529,17 @@ function initEventListeners() {
       const val = parseInt(e.target.value, 10);
       const label = document.getElementById('scrubber-label');
       if (val === 100) {
-        if (label) label.textContent = 'Live';
+        if (label) {
+          label.textContent = 'Live';
+          label.classList.add('live-active-glow');
+        }
         timeScrubberCutoff = 0;
       } else {
-        if (label) label.textContent = `${val}%`;
+        if (label) {
+          label.textContent = `${val}%`;
+          label.classList.remove('live-active-glow');
+        }
+
         if (connectionsStore.length > 0) {
           const timestamps = connectionsStore.map(c => c.timestamp || c.last_seen || 0).sort((a, b) => a - b);
           const minTs = timestamps[0];

@@ -70,9 +70,13 @@
 
           <!-- Unified Start/Stop Capture Toggle Button -->
           <button id="btn-capture-toggle" class="btn btn-success" aria-label="Start or Stop Packet Capture">
-            <svg id="capture-icon" class="icon" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+            <svg id="capture-icon" class="icon" viewBox="0 0 24 24" style="position: relative; width: 18px; height: 18px; display: inline-block;">
+              <path id="path-play" fill="currentColor" d="M8 5v14l11-7z" style="transform-origin: center;"></path>
+              <path id="path-stop" fill="currentColor" d="M6 6h12v12H6z" style="transform-origin: center; opacity: 0;"></path>
+            </svg>
             <span id="capture-toggle-text">Start Capture</span>
           </button>
+
 
           <!-- Live Counter & Timer Widget -->
           <div id="live-capture-widget" class="live-widget hidden">
@@ -82,12 +86,16 @@
         </div>
 
         <!-- Secondary Utility Cluster -->
-        <div class="secondary-controls">
+        <div class="secondary-controls" id="secondary-controls">
           <button id="btn-clear" class="btn btn-secondary" aria-label="Clear Dashboard View">Clear</button>
           <button id="btn-export" class="btn btn-secondary" aria-label="Export CSV Log">Export CSV</button>
           <button id="btn-watchlist" class="btn btn-secondary" aria-label="Configure Watchlist Alerts">Watchlist</button>
           <button id="btn-theme" class="btn btn-icon" aria-label="Toggle Dark Light Theme">☀️</button>
+          <button id="btn-settings" class="btn btn-icon" aria-label="Open Settings">⚙️</button>
         </div>
+        <button id="btn-hamburger" class="btn btn-icon btn-hamburger" aria-label="Toggle controls menu">☰</button>
+
+
       </div>
     </header>
 
@@ -123,7 +131,9 @@
           <div class="map-mode-toggle">
             <button id="mode-pins" class="map-btn active" title="Show individual connection markers on the map" aria-label="Pins mode">Pins</button>
             <button id="mode-heatmap" class="map-btn" title="Show traffic density as a heatmap instead of individual pins" aria-label="Heatmap mode">Heatmap</button>
+            <button id="mode-globe" class="map-btn" title="Show traffic on a 3D rotating globe" aria-label="Globe mode">Globe</button>
           </div>
+
 
           <div class="time-scrubber-container" title="Drag to replay past traffic — release at 'Live' to return to real-time">
             <label for="time-scrubber">History Scrubber:</label>
@@ -141,7 +151,10 @@
         </div>
 
         <!-- Map Container -->
+        <!-- Map Container -->
         <div id="map" class="map-container" aria-label="OpenStreetMap Traffic Visualization"></div>
+        <!-- Globe Container -->
+        <div id="globe-container" class="map-container hidden" aria-label="3D Globe Traffic Visualization"></div>
 
         <!-- Device Location Status Bar Below Map -->
         <div id="device-location-bar" class="device-location-bar">
@@ -150,7 +163,9 @@
           <span id="device-location">Requesting location permission...</span>
           <span class="loc-separator">&nbsp;&nbsp;|&nbsp;&nbsp;</span>
           <span id="device-ip">Detecting IP...</span>
+          <button id="btn-precise-loc" class="btn btn-secondary hidden" style="font-size:0.7rem; padding:0.15rem 0.4rem; margin-left:0.5rem; height:24px; display:inline-flex; align-items:center;">Enable Precise Location</button>
         </div>
+
       </section>
 
       <!-- Collapsible / Resizable Side Panel -->
@@ -177,18 +192,27 @@
         <!-- Analytics Charts & Destinations Section -->
         <div class="analytics-section">
           <div class="charts-grid">
-            <div class="chart-card">
+            <div class="chart-card" id="card-services">
               <div class="chart-title">Services Split</div>
               <div class="chart-canvas-container">
                 <canvas id="chart-services"></canvas>
+                <div id="chart-services-empty" class="chart-empty-overlay">
+                  <div class="empty-overlay-circle"></div>
+                  <span class="empty-overlay-text">No traffic yet</span>
+                </div>
               </div>
             </div>
-            <div class="chart-card">
+            <div class="chart-card" id="card-countries">
               <div class="chart-title">Top Countries</div>
               <div class="chart-canvas-container">
                 <canvas id="chart-countries"></canvas>
+                <div id="chart-countries-empty" class="chart-empty-overlay">
+                  <div class="empty-overlay-bar-placeholder"></div>
+                  <span class="empty-overlay-text">No traffic yet</span>
+                </div>
               </div>
             </div>
+
           </div>
 
           <!-- Top Destinations List -->
@@ -241,8 +265,13 @@
         <span class="feed-subtitle">Real-time human-readable traffic ticker</span>
       </div>
       <div id="live-feed-container" class="live-feed-container">
-        <div class="feed-empty">No activity yet. Click "Start Capture" to view live traffic stream.</div>
+        <div class="feed-empty" style="text-align: center; padding: 1.5rem; display: flex; flex-direction: column; align-items: center; gap: 0.5rem;">
+          <div class="empty-overlay-circle" style="width: 40px; height: 40px; border-width: 1px; display: flex; align-items: center; justify-content: center; opacity: 0.4;">📶</div>
+          <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">No activity yet</span>
+          <span style="font-size: 0.72rem; color: var(--text-muted); opacity: 0.8;">Click "Start Capture" to view live traffic stream</span>
+        </div>
       </div>
+
     </section>
   </div>
 
@@ -313,6 +342,9 @@
     </div>
   </div>
 
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
   <!-- Screen Reader ARIA Live Region -->
   <div id="aria-announcer" class="sr-only" aria-live="assertive"></div>
 
@@ -323,6 +355,10 @@
   <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet-curve@1.0.0/leaflet.curve.min.js"></script>
 
+  <script src="https://unpkg.com/gsap@3/dist/gsap.min.js"></script>
+  <script src="https://unpkg.com/globe.gl"></script>
   <script src="app.js"></script>
+
+
 </body>
 </html>
